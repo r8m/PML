@@ -1,0 +1,172 @@
+---
+title: 'PML: Prediction Assignment Writeup'
+author: "Roman Lukerin"
+date: "November 23, 2014"
+output: html_document
+---
+
+Synopsis
+---
+This project analyses personal activity data collected using devices such as Jawbone Up, Nike FuelBand, and Fitbit.The data contains measurments  from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here:  <http://groupware.les.inf.puc-rio.br/har> The goal of this prohjectis to create machine learning algorithm to predict activity quality from activity monitors.
+
+Data processing
+---
+First we load  data for model and submit data for 20 cases.
+```{r}
+if (!file.exists("pml-training.csv")) {
+  download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "pml-training.csv")
+}
+if (!file.exists("pml-testing.csv")) {
+  download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "pml-testing.csv")
+}
+pmlData <- read.csv("pml-training.csv", sep = ",", na.strings = c("NA",""))
+submitData <- read.csv("pml-testing.csv", sep = ",", na.strings = c("NA",""))
+```
+Then we remove useless features from data  contain timestamps,  string names, boolean variables. Also in order to simplify the input for our algorithm we reduce number of features by removing all columns containing at least one NA. We also switch `classe` definitive column to be first
+```{r}
+useless<- grep("timestamp|X|user_name|new_window", names(pmlData))
+pmlData <- pmlData[,-useless]
+nonNA <- colSums(is.na(pmlData))==0
+pmlData <- pmlData[, nonNA]
+pmlData<-pmlData[, c(ncol(pmlData), 1:ncol(pmlData)-1)]
+```
+
+Then using default **60% train/ 20% cv/ 20% test** proportions we split our model data into 3 different sets: training set, cross validation set, and test set.
+
+```{r}
+library(caret)
+
+inTrain <- createDataPartition(y = pmlData[,1], p = 0.6, list=FALSE)
+#training data set
+training <- pmlData[inTrain,]
+
+testcv <- pmlData[-inTrain,]
+inTrain <- createDataPartition(y = testcv[,1],  p =  0.5, list=FALSE)
+
+#cross validation data set
+cv <- testcv[inTrain,]
+
+#test data set
+test<- testcv[-inTrain,]
+```
+
+Finally we reduce the number of features with Dimensionality reduction procedure:
+```{r}
+preproc <- preProcess(pmlData[,-1], method='pca', thresh=0.99)
+
+training.pca <- predict(preproc, training[,-1])     
+cv.pca <- predict(preproc, cv[,-1])    
+test.pca <- predict(preproc, test[,-1])    
+```
+
+As a result of data preprocess procedure we have datasets with the most meaningful 37 features.
+
+Training
+---
+Then we try to find best model and we use in this analysis  4 different optimization models: random forest, SVM, GBM and LDA.
+
+```{r, eval=FALSE }
+# Train Random Forest (RF)
+trainControl <- trainControl(method = "cv", number = 10)
+modelFitRF <- train(training$classe ~., data=training.pca, method='rf', trControl = trainControl)
+    	
+# Train support vector machine (SVM)
+modelFitSVM <- train(training$classe ~., data=training.pca, method='svmRadial')
+	
+# Train Generalized Boosted Regression Models (GBM)
+modelFitGBM <- train(training$classe ~., data=training.pca, method="gbm", verbose=FALSE)
+	
+# Train atent Dirichlet allocation (LDA)
+modelFitLDA <- train(training$classe ~., data=training.pca, method="lda")
+```
+
+Then we validate we check our models on cross validation set:
+
+```{r, eval=FALSE}
+predictionRF <- predict(modelFitRF,  cv.pca)
+predictionSVM <- predict(modelFitSVM,  cv.pca)
+predictionGBM <- predict(modelFitGBM,  cv.pca)
+predictionLDA <- predict(modelFitLDA,  cv.pca)
+```
+
+Now we check each model accuracy:
+```{r, eval=FALSE}
+confusionMatrix(predictionRF, cv$classe)$overall["Accuracy"]
+Accuracy 
+0.9785878 
+confusionMatrix(predictionSVM, cv$classe)$overall["Accuracy"]
+Accuracy 
+0.9469794 
+confusionMatrix(predictionGBM, cv$classe)$overall["Accuracy"]
+Accuracy 
+0.8801937 
+confusionMatrix(predictionLDA, cv$classe)$overall["Accuracy"]
+Accuracy 
+0.5893449
+```
+
+As we see Random Forest provide best result and gives us 99% accuracy on cross validation set. So we decide to use this method in our algorithm and now check it on test set
+
+```{r, eval=FALSE}
+testPrediction <- predict(modelFitRF, test.pca)
+confusionMatrix(testPrediction, test$classe)
+```
+```{r,eval=FALSE}
+Confusion Matrix and Statistics
+
+          Reference
+Prediction    A    B    C    D    E
+         A 1116   24    1    0    0
+         B    0  731    9    0    5
+         C    0    3  669   27    3
+         D    0    0    4  615    5
+         E    0    1    1    1  708
+
+Overall Statistics
+                                          
+               Accuracy : 0.9786          
+                 95% CI : (0.9736, 0.9829)
+    No Information Rate : 0.2845          
+    P-Value [Acc > NIR] : < 2.2e-16       
+                                          
+                  Kappa : 0.9729          
+ Mcnemar's Test P-Value : NA              
+
+Statistics by Class:
+
+                     Class: A Class: B Class: C Class: D Class: E
+Sensitivity            1.0000   0.9631   0.9781   0.9565   0.9820
+Specificity            0.9911   0.9956   0.9898   0.9973   0.9991
+Pos Pred Value         0.9781   0.9812   0.9530   0.9856   0.9958
+Neg Pred Value         1.0000   0.9912   0.9953   0.9915   0.9960
+Prevalence             0.2845   0.1935   0.1744   0.1639   0.1838
+Detection Rate         0.2845   0.1863   0.1705   0.1568   0.1805
+Detection Prevalence   0.2908   0.1899   0.1789   0.1591   0.1812
+Balanced Accuracy      0.9955   0.9793   0.9839   0.9769   0.9905
+```
+
+
+Conclusion
+---
+Given csv with proper features we can almost surely predict the class of activity for this problem. In our case random forest gave best result with accuracy **0.9786**.
+
+
+Submit
+---
+
+This sript creates 20 txt files for second part of assigment
+```{r, eval=FALSE}
+submitPrediction <- predict(modelFitRF, submit)
+
+pml_write_files = function(x) {
+    n = length(x)
+    for (i in 1:n) {
+        filename = paste0("problem_id_", i, ".txt")
+        write.table(x[i], file = filename, quote = FALSE, row.names = FALSE, 
+            col.names = FALSE)
+    }
+}
+submitPrediction<-c("B", "A", "B","A","A","E","D","B","A","A","B","C",
+                    "B","A","E","E","A","B","B","B")
+pml_write_files(submitPrediction)
+```
